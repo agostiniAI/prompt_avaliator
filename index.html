@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Avaliador de Maturidade Pré-Prompt</title>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background-color: #f0f2f5; margin: 0; padding: 25px; display: flex; justify-content: center; }
+    .container { background: #ffffff; max-width: 700px; width: 100%; border-radius: 12px; padding: 30px; box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+    h1 { font-size: 22px; color: #1a202c; text-align: center; margin: 0 0 6px 0; }
+    p.desc { font-size: 14px; color: #718096; text-align: center; margin-bottom: 20px; }
+    
+    /* Abas de Categoria */
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+    .tab-btn { flex: 1; padding: 10px; background: #edf2f7; border: none; border-radius: 6px; font-weight: 600; font-size: 14px; color: #4a5568; cursor: pointer; transition: all 0.2s; }
+    .tab-btn:hover { background: #e2e8f0; }
+    .tab-btn.active { background: #2b6cb0; color: #ffffff; }
+
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 13px; font-weight: 600; color: #2d3748; margin-bottom: 6px; }
+    textarea { width: 100%; height: 80px; padding: 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 13px; resize: vertical; }
+    select { width: 100%; padding: 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 13px; background: #fff; }
+    
+    button.btn-submit { width: 100%; padding: 12px; background: #3182ce; color: #fff; border: none; border-radius: 6px; font-size: 15px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+    button.btn-submit:hover { background: #2b6cb0; }
+    
+    #result-box { margin-top: 25px; padding-top: 20px; border-top: 1px solid #e2e8f0; display: none; }
+    .bar-track { width: 100%; height: 22px; background: #edf2f7; border-radius: 11px; overflow: hidden; margin: 12px 0; border: 1px solid #cbd5e0; }
+    .bar-fill { height: 100%; width: 0%; transition: width 0.5s ease-in-out; border-radius: 11px; }
+    .score-title { font-size: 16px; font-weight: bold; text-align: center; margin: 0; }
+    .feedback { font-size: 13px; line-height: 1.5; padding: 15px; border-radius: 6px; background: #f7fafc; border-left: 4px solid #3182ce; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>Auditoria Pré-Prompt</h1>
+  <p class="desc">Escolha a categoria, avalie os critérios objetivos e refine sua instrução antes de consumir tokens.</p>
+
+  <div class="tabs">
+    <button type="button" class="tab-btn active" onclick="selecionarCategoria('codigo')">Código</button>
+    <button type="button" class="tab-btn" onclick="selecionarCategoria('imagem')">Imagem</button>
+    <button type="button" class="tab-btn" onclick="selecionarCategoria('geral')">Geral</button>
+  </div>
+
+  <form id="audit-form">
+    <div class="form-group">
+      <label>Rascunho do Prompt:</label>
+      <textarea id="promptDraft" placeholder="Insira o texto que você pretende submeter à IA..." required></textarea>
+    </div>
+
+    <!-- Container dos 4 critérios dinâmicos -->
+    <div id="criteria-container"></div>
+
+    <button type="submit" class="btn-submit">Auditar Meu Prompt</button>
+  </form>
+
+  <div id="result-box">
+    <div class="score-title" id="score-title"></div>
+    <div class="bar-track">
+      <div class="bar-fill" id="bar-fill"></div>
+    </div>
+    <div class="feedback" id="feedback-text"></div>
+  </div>
+</div>
+
+<script>
+  const criteriosPorCategoria = {
+    codigo: {
+      titulo: 'Prompts para Gerar Código',
+      perguntas: [
+        {
+          label: '1. Especificação de Stack, Linguagem e Versão:',
+          opcoes: [
+            { pts: 5, texto: 'Não especifica ambiente; a IA decide a linguagem e método' },
+            { pts: 15, texto: 'Informa a linguagem, mas não restringe versões ou bibliotecas' },
+            { pts: 25, texto: 'Especificação estrita (ex.: Node.js v18 com Express, sem libs extras)' }
+          ]
+        },
+        {
+          label: '2. Definição de Entradas, Lógica e Saídas (I/O):',
+          opcoes: [
+            { pts: 5, texto: 'Pede apenas "faça um sistema" sem delimitar os dados' },
+            { pts: 15, texto: 'Define a tarefa principal, mas omite campos do payload ou retorno' },
+            { pts: 25, texto: 'Mapeia entrada (JSON), regra de negócio e payload de resposta exatos' }
+          ]
+        },
+        {
+          label: '3. Resiliência e Tratamento de Exceções:',
+          opcoes: [
+            { pts: 5, texto: 'Não menciona tratamento de falhas ou validações' },
+            { pts: 15, texto: 'Pede tratamento genérico sem especificar status de erro' },
+            { pts: 25, texto: 'Exige try/catch, captura de erros, status HTTP apropriados e I/O não-bloqueante' }
+          ]
+        },
+        {
+          label: '4. Formato de Saída e Comentários:',
+          opcoes: [
+            { pts: 5, texto: 'Sem regras de formato; resposta vem repleta de texto didático prolixo' },
+            { pts: 15, texto: 'Pede apenas o código, mas a IA ainda inclui explicações em volta' },
+            { pts: 25, texto: 'Exige código único, funcional, pronto para teste e comentado no essencial' }
+          ]
+        }
+      ]
+    },
+    imagem: {
+      titulo: 'Prompts para Gerar Imagem',
+      perguntas: [
+        {
+          label: '1. Sujeito e Ponto Focal Central:',
+          opcoes: [
+            { pts: 5, texto: 'Sujeito vago ou conceitual (ex.: "uma pessoa pensando")' },
+            { pts: 15, texto: 'Sujeito nomeado, mas sem detalhes de pose ou expressão' },
+            { pts: 25, texto: 'Elemento principal com ação, postura e expressão claras' }
+          ]
+        },
+        {
+          label: '2. Enquadramento, Proporção e Ângulo:',
+          opcoes: [
+            { pts: 5, texto: 'Não especifica câmera nem proporção de aspecto' },
+            { pts: 15, texto: 'Define proporção (ex.: 9:16), mas não indica o plano de câmera' },
+            { pts: 25, texto: 'Indica plano detalhado (close-up, aberto) e proporção exata' }
+          ]
+        },
+        {
+          label: '3. Iluminação, Paleta de Cores e Estética:',
+          opcoes: [
+            { pts: 5, texto: 'Não indica iluminação ou usa apenas "bonito/legal"' },
+            { pts: 15, texto: 'Indica apenas uma cor de destaque sem direção de luz' },
+            { pts: 25, texto: 'Luz volumétrica, fontes nomeadas (neon ciano, luz solar) e estilo definido' }
+          ]
+        },
+        {
+          label: '4. Ausência de Ruído Abstrato (Termos Concretos):',
+          opcoes: [
+            { pts: 5, texto: 'Cheio de adjetivos abstratos como "maravilhoso", "hiper-realista"' },
+            { pts: 15, texto: 'Mistura termos visuais com ordens conceituais' },
+            { pts: 25, texto: 'Zero abstração: 100% focado em elementos físicos tangíveis' }
+          ]
+        }
+      ]
+    },
+    geral: {
+      titulo: 'Prompts Gerais (Decisões, Textos e Tarefas)',
+      perguntas: [
+        {
+          label: '1. Papel e Perspectiva (Persona):',
+          opcoes: [
+            { pts: 5, texto: 'Sem persona; comando lançado no vazio' },
+            { pts: 15, texto: 'Persona genérica ("Aja como um especialista")' },
+            { pts: 25, texto: 'Papel altamente especializado com contexto de atuação nítido' }
+          ]
+        },
+        {
+          label: '2. Especificidade do Objetivo e Ação:',
+          opcoes: [
+            { pts: 5, texto: 'Múltiplos pedidos confusos em uma mesma instrução' },
+            { pts: 15, texto: 'Objetivo identificável, mas com margem para respostas abertas' },
+            { pts: 25, texto: 'Verbo de ação direto com critério de conclusão transparente' }
+          ]
+        },
+        {
+          label: '3. Controle de Ruído (Anti-Desperdício de Tokens):',
+          opcoes: [
+            { pts: 5, texto: 'Contém saudações, preâmbulos e rodeios dispensáveis' },
+            { pts: 15, texto: 'Razoavelmente enxuto, mas ainda repete instruções' },
+            { pts: 25, texto: 'Zero ruído: densidade máxima de parâmetros técnicos' }
+          ]
+        },
+        {
+          label: '4. Restrições e Formato Estrito de Entrega:',
+          opcoes: [
+            { pts: 5, texto: 'Sem delimitação de formato; entrega arbitrária da IA' },
+            { pts: 15, texto: 'Pede lista ou tópicos, mas sem travas negativas' },
+            { pts: 25, texto: 'Formato rígido (tabela, limites de itens, sem preâmbulo)' }
+          ]
+        }
+      ]
+    }
+  };
+
+  let categoriaAtual = 'codigo';
+
+  function renderizarCriterios() {
+    const container = document.getElementById('criteria-container');
+    const dados = criteriosPorCategoria[categoriaAtual];
+    container.innerHTML = '';
+
+    dados.perguntas.forEach((p, idx) => {
+      const formGroup = document.createElement('div');
+      formGroup.className = 'form-group';
+
+      const label = document.createElement('label');
+      label.innerText = p.label;
+      formGroup.appendChild(label);
+
+      const select = document.createElement('select');
+      select.id = `crit_${idx}`;
+      select.required = true;
+
+      const optDefault = document.createElement('option');
+      optDefault.value = '';
+      optDefault.innerText = 'Selecione a classificação...';
+      select.appendChild(optDefault);
+
+      p.opcoes.forEach(opt => {
+        const option = document.createElement('option');
+        option.value = opt.pts;
+        option.innerText = `(${opt.pts} pts) ${opt.texto}`;
+        select.appendChild(option);
+      });
+
+      formGroup.appendChild(select);
+      container.appendChild(formGroup);
+    });
+
+    document.getElementById('result-box').style.display = 'none';
+  }
+
+  function selecionarCategoria(cat) {
+    categoriaAtual = cat;
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.innerText.toLowerCase().includes(cat));
+    });
+    renderizarCriterios();
+  }
+
+  document.getElementById('audit-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    let total = 0;
+    for (let i = 0; i < 4; i++) {
+      total += parseInt(document.getElementById(`crit_${i}`).value);
+    }
+
+    const box = document.getElementById('result-box');
+    const bar = document.getElementById('bar-fill');
+    const title = document.getElementById('score-title');
+    const feedback = document.getElementById('feedback-text');
+
+    box.style.display = 'block';
+    bar.style.width = total + '%';
+
+    if (total <= 40) {
+      bar.style.background = '#e53e3e';
+      title.innerText = `Maturidade: ${total}/100 - Faixa Crítica (Alto Risco de Ruído/Alucinação)`;
+      feedback.innerHTML = '<strong>Diagnóstico:</strong> A instrução carece de especificações essenciais. <em>Ação corretiva:</em> Defina formato de saída delimitado, elimine preâmbulos e declare os parâmetros da categoria antes de submeter.';
+    } else if (total <= 65) {
+      bar.style.background = '#dd6b20';
+      title.innerText = `Maturidade: ${total}/100 - Faixa Intermediária (Razoável)`;
+      feedback.innerHTML = '<strong>Diagnóstico:</strong> A IA compreenderá a tarefa, mas gastará tokens excessivos ou poderá divagar nas regras de negócio. <em>Ação corretiva:</em> Adicione restrições estritas e reforce as regras de entrega.';
+    } else if (total <= 85) {
+      bar.style.background = '#3182ce';
+      title.innerText = `Maturidade: ${total}/100 - Faixa Eficiente (Estrutura Sólida)`;
+      feedback.innerHTML = '<strong>Diagnóstico:</strong> Prompt preciso, sem redundâncias e focado no objetivo. Proporciona alto retorno por token investido com mínimas refatorações.';
+    } else {
+      bar.style.background = '#38a169';
+      title.innerText = `Maturidade: ${total}/100 - Faixa Especialista (Engenharia de Precisão)`;
+      feedback.innerHTML = '<strong>Diagnóstico:</strong> Excelência técnica. Instrução cirúrgica, desacoplada de ruídos e pronta para automações escaláveis de alto rendimento.';
+    }
+
+    box.scrollIntoView({ behavior: 'smooth' });
+  });
+
+  // Inicialização na carga da página
+  renderizarCriterios();
+</script>
+
+</body>
+</html>
